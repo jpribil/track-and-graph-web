@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3080:3000"
+    environment:
+      DATABASE_URL: postgres://trackgraph:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/trackgraph
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-true}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: trackgraph
+      POSTGRES_USER: trackgraph
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trackgraph -d trackgraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

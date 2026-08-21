@@ -4,7 +4,15 @@ Self-hosted, multi-user web implementation compatible with [Track & Graph](https
 
 ## Status
 
-The project is in its planning and compatibility-discovery phase. It does not yet provide a deployable application.
+The first runnable slice is available: accounts, private user data, groups, trackers and timestamped data points. Import/export compatibility, graphs, reminders, functions and Lua support are still in development.
+
+## Run locally with Docker
+
+1. Copy `.env.example` to `.env` and replace all example passwords.
+2. Run `docker compose up --build`.
+3. Open `http://localhost:3080` and sign in with the configured bootstrap account, or register an account while `ALLOW_REGISTRATION=true`.
+
+For a VPS, place the application behind an HTTPS reverse proxy and set `APP_ORIGIN` to its public URL. Use a unique, long `POSTGRES_PASSWORD`, then set `ALLOW_REGISTRATION=false` once the intended accounts exist.
 
 ## Goals
 
@@ -19,4 +27,4 @@ The web app will use its own multi-user database rather than sharing the Android
 
 ## License
 
-The upstream project is GPL-3.0-or-later. This repository is intended to be released under GPL-3.0-or-later before application code is published; copyright and source-distribution obligations will be retained for all derived work.
+This project is licensed under GPL-3.0-or-later. The upstream project is also GPL-3.0-or-later; copyright and source-distribution obligations are retained for all derived work.
