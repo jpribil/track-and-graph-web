@@ -63,7 +63,7 @@ export async function currentUser(request: FastifyRequest): Promise<CurrentUser 
 export async function requireUser(request: FastifyRequest, reply: FastifyReply): Promise<CurrentUser | null> {
   const user = await currentUser(request);
   if (!user) {
-    reply.code(401).send({ error: "Přihlášení vypršelo nebo chybí." });
+    reply.code(401).send({ error: "Your session has expired or is missing." });
     return null;
   }
   return user;
