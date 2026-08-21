@@ -1,0 +1,17 @@
+# Node and package managers
+node_modules/
+.next/
+dist/
+coverage/
+
+# Secrets and runtime data
+.env
+.env.*
+!.env.example
+data/
+
+# Editor and operating-system files
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
