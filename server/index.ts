@@ -22,6 +22,19 @@ function number(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function csvCell(value: string | number | null): string {
+  const raw = value === null ? "" : String(value);
+  return /[",\r\n]/.test(raw) ? `"${raw.replaceAll("\"", "\"\"")}"` : raw;
+}
+
+function durationCsvValue(value: number): string {
+  const seconds = Math.trunc(value);
+  const hours = Math.trunc(seconds / 3600);
+  const minutes = Math.trunc((seconds % 3600) / 60);
+  const remainingSeconds = seconds % 60;
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
 async function ownsGroup(userId: string, groupId: string): Promise<boolean> {
   const result = await db.query("SELECT 1 FROM tracker_groups WHERE id = $1 AND owner_id = $2", [groupId, userId]);
   return result.rowCount === 1;
@@ -142,6 +155,39 @@ app.post("/api/groups/:groupId/trackers", async (request, reply) => {
     [id, groupId, name, description, body?.isDuration === true, defaultValue],
   );
   return reply.code(201).send({ tracker: { id, name, description, is_duration: body?.isDuration === true, default_value: defaultValue } });
+});
+
+app.get("/api/groups/:groupId/export.csv", async (request, reply) => {
+  const user = await requireUser(request, reply);
+  if (!user) return;
+  const { groupId } = request.params as { groupId: string };
+  if (!(await ownsGroup(user.id, groupId))) return reply.code(404).send({ error: "Group not found." });
+  const result = await db.query<{
+    tracker_name: string;
+    is_duration: boolean;
+    value: number;
+    label: string | null;
+    note: string | null;
+    tracked_at: Date;
+  }>(
+    `SELECT t.name AS tracker_name, t.is_duration, p.value, p.label, p.note, p.tracked_at
+     FROM trackers t JOIN data_points p ON p.tracker_id = t.id
+     WHERE t.group_id = $1
+     ORDER BY t.position, t.created_at, p.tracked_at DESC, p.created_at DESC`,
+    [groupId],
+  );
+  const rows = result.rows.map((point) => [
+    point.tracker_name,
+    point.tracked_at.toISOString(),
+    point.is_duration ? durationCsvValue(point.value) : point.value,
+    point.label,
+    point.note,
+  ].map(csvCell).join(","));
+  const csv = ["FeatureName,Timestamp,Value,Label,Note", ...rows].join("\r\n") + "\r\n";
+  return reply
+    .header("content-type", "text/csv; charset=utf-8")
+    .header("content-disposition", "attachment; filename=track-and-graph.csv")
+    .send(csv);
 });
 
 app.get("/api/trackers/:trackerId", async (request, reply) => {
