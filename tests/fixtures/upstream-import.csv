@@ -1,0 +1,3 @@
+FeatureName,Timestamp,Value,Label,Note
+Imported metric,2026-08-21T12:00:00Z,42.5,verification,CSV import test
+Imported duration,2026-08-21T12:05:00Z,1:02:03,focus,Duration import test

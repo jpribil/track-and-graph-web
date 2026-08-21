@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import cookie from "@fastify/cookie";
+import multipart from "@fastify/multipart";
 import fastify from "fastify";
 import fastifyStatic from "@fastify/static";
 import { clearSession, createSession, currentUser, deleteSession, hashPassword, requireUser, verifyPassword } from "./auth.js";
@@ -12,6 +13,7 @@ const allowRegistration = process.env.ALLOW_REGISTRATION !== "false";
 const staticRoot = join(fileURLToPath(new URL("..", import.meta.url)), "dist");
 
 await app.register(cookie);
+await app.register(multipart, { limits: { fileSize: 10 * 1024 * 1024, files: 1 } });
 
 function text(value: unknown, max = 300): string | null {
   return typeof value === "string" && value.trim().length > 0 && value.trim().length <= max ? value.trim() : null;
@@ -33,6 +35,29 @@ function durationCsvValue(value: number): string {
   const minutes = Math.trunc((seconds % 3600) / 60);
   const remainingSeconds = seconds % 60;
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function parseCsv(input: string): string[][] {
+  const rows: string[][] = []; let row: string[] = []; let cell = ""; let quoted = false;
+  for (let index = 0; index < input.length; index += 1) {
+    const char = input[index];
+    if (quoted) { if (char === '"' && input[index + 1] === '"') { cell += '"'; index += 1; } else if (char === '"') quoted = false; else cell += char; }
+    else if (char === '"') quoted = true;
+    else if (char === ',') { row.push(cell); cell = ""; }
+    else if (char === '\n') { row.push(cell.replace(/\r$/, "")); rows.push(row); row = []; cell = ""; }
+    else cell += char;
+  }
+  if (cell || row.length) { row.push(cell); rows.push(row); }
+  if (quoted) throw new Error("CSV contains an unclosed quoted field.");
+  return rows;
+}
+
+function parseCsvValue(raw: string): { value: number; isDuration: boolean; legacyLabel: string } | null {
+  const duration = /^(-?\d+):(-?\d{2}):(-?\d{2})$/.exec(raw);
+  if (duration) return { value: Number(duration[1]) * 3600 + Number(duration[2]) * 60 + Number(duration[3]), isDuration: true, legacyLabel: "" };
+  const legacy = /^([^:]+):(.*)$/.exec(raw);
+  const value = Number(legacy ? legacy[1] : raw);
+  return Number.isFinite(value) ? { value, isDuration: false, legacyLabel: legacy?.[2] ?? "" } : null;
 }
 
 async function ownsGroup(userId: string, groupId: string): Promise<boolean> {
@@ -188,6 +213,37 @@ app.get("/api/groups/:groupId/export.csv", async (request, reply) => {
     .header("content-type", "text/csv; charset=utf-8")
     .header("content-disposition", "attachment; filename=track-and-graph.csv")
     .send(csv);
+});
+
+app.post("/api/groups/:groupId/import.csv", async (request, reply) => {
+  const user = await requireUser(request, reply);
+  if (!user) return;
+  const { groupId } = request.params as { groupId: string };
+  if (!(await ownsGroup(user.id, groupId))) return reply.code(404).send({ error: "Group not found." });
+  const upload = await request.file();
+  if (!upload) return reply.code(400).send({ error: "Choose a CSV file to import." });
+  const rows = parseCsv((await upload.toBuffer()).toString("utf8"));
+  const [header, ...records] = rows;
+  const expected = ["FeatureName", "Timestamp", "Value"];
+  if (!header || expected.some((name) => !header.includes(name))) return reply.code(400).send({ error: "CSV must include FeatureName, Timestamp, and Value columns." });
+  const column = (name: string) => header.indexOf(name);
+  const featureColumn = column("FeatureName"), timestampColumn = column("Timestamp"), valueColumn = column("Value"), labelColumn = column("Label"), noteColumn = column("Note");
+  const existing = await db.query<{ id: string; name: string; is_duration: boolean }>("SELECT id, name, is_duration FROM trackers WHERE group_id = $1", [groupId]);
+  const trackers = new Map(existing.rows.map((tracker) => [tracker.name, tracker]));
+  const client = await db.connect(); let imported = 0;
+  try {
+    await client.query("BEGIN");
+    for (const [offset, record] of records.entries()) {
+      if (record.every((value) => value === "")) continue;
+      const name = record[featureColumn]?.trim(); const parsed = parseCsvValue(record[valueColumn] ?? ""); const date = new Date(record[timestampColumn] ?? "");
+      if (!name || !parsed || Number.isNaN(date.valueOf())) throw new Error(`Invalid CSV record on line ${offset + 2}.`);
+      let tracker = trackers.get(name);
+      if (!tracker) { tracker = { id: randomUUID(), name, is_duration: parsed.isDuration }; await client.query("INSERT INTO trackers (id, group_id, name, is_duration, position) VALUES ($1, $2, $3, $4, (SELECT COUNT(*) FROM trackers WHERE group_id = $2))", [tracker.id, groupId, name, parsed.isDuration]); trackers.set(name, tracker); }
+      if (tracker.is_duration !== parsed.isDuration) throw new Error(`Inconsistent value type for ${name} on line ${offset + 2}.`);
+      await client.query("INSERT INTO data_points (id, tracker_id, value, label, note, tracked_at) VALUES ($1, $2, $3, $4, $5, $6)", [randomUUID(), tracker.id, parsed.value, (record[labelColumn] ?? parsed.legacyLabel) || null, record[noteColumn] || null, date]); imported += 1;
+    }
+    await client.query("COMMIT"); return { imported };
+  } catch (error) { await client.query("ROLLBACK"); return reply.code(400).send({ error: error instanceof Error ? error.message : "CSV import failed." }); } finally { client.release(); }
 });
 
 app.get("/api/trackers/:trackerId", async (request, reply) => {
